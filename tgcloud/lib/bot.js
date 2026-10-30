@@ -10,6 +10,7 @@ import { escapeHtml } from './format.js';
 import { t } from './i18n.js';
 import { WEBAPP_URL } from './secrets.js';
 import { setupAdmin, setupIfNeeded } from './setup.js';
+import { locateSubtopic, parseStartParam } from './share.js';
 import { answer, button, editButtons, editHtml, keyboard, sendHtml, show } from './ui.js';
 import { counselorByUser, isAdmin, linkCounselor, markBlocked, setLang, setState, touchUser } from './users.js';
 import {
@@ -66,6 +67,21 @@ async function dashboardButton(chatId, lang) {
   return sendHtml(chatId, t(lang, 'dashboardIntro'), keyboard([[{ text: t(lang, 'dashboard'), web_app: { url: WEBAPP_URL } }]]));
 }
 
+// "Read in the bot" on a shared card: /start a_<subtopic>_<d|s>_<lang>.
+async function openSharedArticle(chatId, user, param) {
+  const link = parseStartParam(param);
+  if (!link) return false;
+  const catalog = await getCatalog();
+  const place = locateSubtopic(catalog, link.slug);
+  if (!place) return false;
+  // Someone arriving from a shared card reads in that card's language until they choose.
+  if (!user.lang) await setLang(user.id, link.lang);
+  const lang = user.lang || link.lang;
+  await show(chatId, null, await articleView(lang, place.ti, place.si, link.type, link.lang, user.id));
+  await logEvent(user.id, 'shared_open', `${link.slug}/${link.type}_${link.lang}`, link.lang);
+  return true;
+}
+
 async function onCommand(message, user, command) {
   const chatId = message.chat.id;
   const lang = user.lang || 'en';
@@ -76,6 +92,7 @@ async function onCommand(message, user, command) {
         await safely('setup', setupIfNeeded);
         await safely('admin setup', () => setupAdmin(user.id));
       }
+      if (await openSharedArticle(chatId, user, command.arg)) return undefined;
       return show(chatId, null, user.lang ? menuFor(user, lang) : langChooser());
     case 'menu':
       return show(chatId, null, menuFor(user, lang));

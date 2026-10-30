@@ -5,8 +5,9 @@ import { findBookmark, listBookmarks } from './bookmarks.js';
 import { WEBAPP_URL } from './secrets.js';
 import { ARTICLE_TYPES, SEARCH_RESULTS, SITE_URL, SOCIAL_LINKS, SUBTOPICS_PER_PAGE, TEAM, WELCOME_PHOTO } from './constants.js';
 import {
-  articleWebUrl, audioUrl, findSubtopic, getArticle, getCatalog, getSubtopicDetail, personName, personRole, pick, telegramPost,
+  articleWebUrl, audioUrl, findSubtopic, getArticle, getCatalog, searchSubtopics, getSubtopicDetail, personName, personRole, pick, telegramPost,
 } from './content.js';
+import { shareButton } from './share.js';
 import { fileName, photoUrl, sendAlbum, sendOriginals } from './files.js';
 import { clip, escapeHtml, markdownToHtml } from './format.js';
 import { t } from './i18n.js';
@@ -185,12 +186,6 @@ function articleLanguage(subtopic, type, preferred) {
   return subtopic.articles[type]?.[other] ? other : null;
 }
 
-function articleShareButton(lang, theme, subtopic, type, articleLang) {
-  const params = { theme: theme.slug, subtopic: subtopic.slug, type, lang: articleLang, uiLang: lang };
-  const query = Object.entries(params).map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('&');
-  return { text: t(lang, 'shareArticle'), web_app: { url: `${WEBAPP_URL.replace(/\/$/, '')}/share.html?${query}` } };
-}
-
 async function articleBookmarkButton(lang, userId, ti, si, theme, subtopic, type, articleLang, fresh = false) {
   if (!userId) return null;
   const saved = await findBookmark(userId, theme.slug, subtopic.slug, type, articleLang);
@@ -248,7 +243,7 @@ export async function articleView(lang, ti, si, type, articleLang, userId) {
     photo: photoUrl(pick(subtopic.covers, readLang)) || undefined,
     keyboard: keyboard([
       ...articleActions(lang, ti, si, type, readLang, subtopic),
-      [articleShareButton(lang, theme, subtopic, type, readLang),
+      [shareButton(lang, subtopic, type, readLang),
         await articleBookmarkButton(lang, userId, ti, si, theme, subtopic, type, readLang)].filter(Boolean),
       subtopic.articles[type][otherLang] ? [button(t(readLang, 'readIn'), `v:${ti}:${si}:${TYPE_CODE[type]}:${otherLang}`)] : null,
       [button(t(lang, 'back'), `s:${ti}:${si}`), button(t(lang, 'home'), 'M')],
@@ -371,7 +366,7 @@ export async function sendArticle(chatId, lang, ti, si, type, articleLang, userI
   }
   rows.push([button(t(lang, 'back'), `v:${ti}:${si}:${TYPE_CODE[type]}:${readLang}:n`), button(t(lang, 'home'), 'M:n')]);
   rows.push([
-    articleShareButton(lang, theme, subtopic, type, readLang),
+    shareButton(lang, subtopic, type, readLang),
     await articleBookmarkButton(lang, userId, ti, si, theme, subtopic, type, readLang, true),
   ].filter(Boolean));
   rows.push([
@@ -433,21 +428,9 @@ export async function randomDevotional(lang) {
   return choices[Math.floor(Math.random() * choices.length)];
 }
 
-function normalize(text) {
-  return String(text || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-}
-
 export async function searchView(lang, query) {
   const { themes } = await getCatalog();
-  const needle = normalize(query);
-  const results = [];
-  themes.forEach((theme, ti) => theme.subtopics.forEach((subtopic, si) => {
-    const haystack = normalize([
-      theme.title.en, theme.title.am, subtopic.title.en, subtopic.title.am,
-      subtopic.description.en, subtopic.description.am, subtopic.slug,
-    ].join(' '));
-    if (needle && haystack.includes(needle)) results.push({ ti, si, theme, subtopic });
-  }));
+  const results = searchSubtopics(themes, query);
   const safe = escapeHtml(clip(query, 60));
   if (!results.length) {
     return {

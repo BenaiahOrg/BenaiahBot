@@ -14,7 +14,7 @@ const { default: dashboardEndpoint } = await import('../tgcloud/endpoints/adminD
 const { default: counselorEndpoint } = await import('../tgcloud/endpoints/adminCounselor.js');
 const { default: saveEndpoint } = await import('../tgcloud/endpoints/adminCounselorSave.js');
 const { default: adminSaveEndpoint } = await import('../tgcloud/endpoints/adminAdminSave.js');
-const { default: prepareShareEndpoint } = await import('../tgcloud/endpoints/prepareArticleShare.js');
+const { default: inlineQueryHandler } = await import('../tgcloud/handlers/inline_query.js');
 const { default: setupEndpoint } = await import('../tgcloud/endpoints/setup.js');
 const { chunkText, markdownToHtml } = await import('../tgcloud/lib/format.js');
 const { CATALOG_CACHE_KEY, getCatalog, telegramPost } = await import('../tgcloud/lib/content.js');
@@ -22,7 +22,6 @@ const { saveBookmark, listBookmarks } = await import('../tgcloud/lib/bookmarks.j
 const { BROADCAST_BATCH_SIZE, sendBroadcastBatch } = await import('../tgcloud/lib/broadcast.js');
 const { isAdmin } = await import('../tgcloud/lib/users.js');
 const { aboutPage, articleView } = await import('../tgcloud/lib/views.js');
-const { verifyShareScreen } = await import('./share-ui.mjs');
 
 const people = {
   admin: { id: 900, first_name: 'Admin', username: 'boss' },
@@ -179,9 +178,8 @@ await test('reading an article sends one rich message with buttons to switch lan
   assert.ok(data.includes('v:1:0:d:am:n'));
   assert.ok(data.includes('g:1:0:q:d:am:n'));
   assert.ok(buttons(rich).some((b) => b.url?.startsWith('https://www.benaiah.org/articles/themes/Names%20of%20God/')));
-  const share = new URL(buttons(rich).find((b) => b.web_app?.url.includes('/share.html?')).web_app.url);
-  assert.equal(share.searchParams.get('subtopic'), 'jehovah-jireh');
-  assert.equal(share.searchParams.get('lang'), 'am');
+  assert.ok(buttons(rich).some((b) => b.switch_inline_query === 'jehovah-jireh devotional am'), 'Share opens the chat picker directly');
+  assert.ok(!buttons(rich).some((b) => b.web_app), 'articles open no web app');
   assert.ok(data.includes('bs:1:0:d:am:n'));
   assert.equal(query("SELECT count(*) AS n FROM events WHERE kind = 'article'")[0].n, 1);
 });
@@ -206,7 +204,7 @@ await test('when rich messages are refused, the article goes out as plain chunks
   assert.ok(plain.length >= 4, `chunks: ${plain.length}`);
   for (const call of plain) assert.ok(call.params.text.length <= 4096);
   assert.ok(buttons(plain[plain.length - 1]).length > 0, 'buttons ride on the last chunk');
-  assert.ok(buttons(plain[plain.length - 1]).some((b) => b.web_app?.url.includes('/share.html?')), 'the plain-text fallback can still be shared');
+  assert.ok(buttons(plain[plain.length - 1]).some((b) => b.switch_inline_query), 'the plain-text fallback can still be shared');
   assert.equal(buttons(plain[0]).length, 0);
 });
 
@@ -272,28 +270,14 @@ await test('About offers localized bug and feature drafts addressed to the exist
   }
 });
 
-await test('article sharing prepares a clickable title for the exact article type and language', async () => {
+await test('Share buttons name the exact article type and language', async () => {
   for (const type of ['devotional', 'study_material']) {
     for (const lang of ['en', 'am']) {
       const view = await articleView('am', 1, 0, type, lang);
-      const link = view.keyboard.inline_keyboard.flat().find((b) => b.web_app?.url.includes('/share.html?'));
-      assert.ok(link);
-      const url = new URL(link.web_app.url);
-      assert.equal(url.origin + url.pathname, 'https://app1.tgcloud.ai/share.html');
-      const input = Object.fromEntries(url.searchParams);
-      assert.equal(input.type, type);
-      assert.equal(input.lang, lang);
-      resetCalls();
-      const prepared = await prepareShareEndpoint({ ...input, userId: 900, url: 'https://example.com/forged' }, { initData: { user: { id: 101 } } });
-      assert.ok(prepared.id);
-      const call = sent('savePreparedInlineMessage')[0];
-      assert.equal(call.params.user_id, 101, 'use the verified user, not a client-provided recipient');
-      const html = call.params.result.input_message_content.message_text;
-      assert.ok(html.startsWith(`<a href="https://www.benaiah.org/articles/themes/Names%20of%20God/Jehovah%20Jireh/${type}_${lang}">`));
-      assert.match(html, lang === 'am' ? /ጄሆቫ ይርኤ/ : /Jehovah Jireh/);
-      assert.ok(!html.replace(/<[^>]*>/g, '').includes('https://'), 'the visible text has no raw URL');
-      assert.ok(!html.includes('example.com'));
-      assert.equal(sent('sendMessage').length, 0, 'the user chooses the recipient and sends through Telegram');
+      const flat = view.keyboard.inline_keyboard.flat();
+      const word = type === 'devotional' ? 'devotional' : 'study';
+      assert.ok(flat.some((b) => b.switch_inline_query === `jehovah-jireh ${word} ${lang}`));
+      assert.ok(!flat.some((b) => b.web_app));
     }
   }
 });
@@ -385,8 +369,8 @@ await test('missing media fields and unavailable translations still offer readin
     assert.ok(buttonData(101).includes('a:1:0:d:en'), 'fallback article uses its actual language');
     assert.ok(buttonData(101).includes('g:1:0:q:d:en'));
     assert.ok(!buttonData(101).some((d) => /^(av|an):/.test(d)));
-    const share = calls.flatMap(buttons).find((b) => b.web_app?.url.includes('/share.html?'));
-    assert.equal(new URL(share.web_app.url).searchParams.get('lang'), 'en', 'share the available translation');
+    const share = calls.flatMap(buttons).find((b) => b.switch_inline_query);
+    assert.equal(share.switch_inline_query, 'jehovah-jireh devotional en', 'share the available translation');
   });
 });
 
@@ -470,22 +454,59 @@ await test('narration links parse public and private posts and reject malformed 
 });
 
 // ── Counselors and setup ──────────────────────────────────────────────────
-await test('sharing rejects unverified users and unavailable translations, and escapes article titles', async () => {
-  const input = { theme: 'names-of-god', subtopic: 'jehovah-jireh', type: 'devotional', lang: 'en', uiLang: 'en' };
+const inline = async (person, q) => {
   resetCalls();
-  await assert.rejects(prepareShareEndpoint(input, {}), EndpointError);
-  await assert.rejects(prepareShareEndpoint({ ...input, type: 'other' }, { initData: { user: { id: 101 } } }), EndpointError);
-  assert.equal(sent('savePreparedInlineMessage').length, 0);
-  await withMediaCatalog((topic) => { topic.title.en = 'A & B <script>'; topic.articles.devotional.am = null; }, async () => {
-    await assert.rejects(prepareShareEndpoint({ ...input, lang: 'am' }, { initData: { user: { id: 101 } } }), EndpointError);
-    await prepareShareEndpoint(input, { initData: { user: { id: 101 } } });
-    const html = sent('savePreparedInlineMessage')[0].params.result.input_message_content.message_text;
-    assert.ok(html.includes('A &amp; B &lt;script&gt;'));
-    assert.ok(!html.includes('<script>'));
-  });
+  await inlineQueryHandler({ id: 'q1', from: person, query: q, offset: '' });
+  const call = sent('answerInlineQuery')[0];
+  assert.ok(call, 'the inline query is answered');
+  return call.params.results;
+};
+
+await test('sharing posts one card for the exact article, with buttons and no web app', async () => {
+  const [card, ...rest] = await inline(people.seeker, 'jehovah-jireh devotional en');
+  assert.equal(rest.length, 0);
+  assert.equal(card.type, 'photo');
+  assert.match(card.photo_url, /\/image\/upload\/c_limit,.*f_jpg/, 'a resized JPEG, as Telegram requires');
+  assert.match(card.thumbnail_url, /w_320/);
+  assert.match(card.caption, /^<b>Jehovah Jireh<\/b>/);
+  const flat = card.reply_markup.inline_keyboard.flat();
+  assert.ok(flat.some((b) => b.url === 'https://t.me/BenaiahTestBot?start=a_jehovah-jireh_d_en'));
+  assert.ok(flat.some((b) => b.url?.startsWith('https://www.benaiah.org/articles/themes/Names%20of%20God/Jehovah%20Jireh/devotional_en')));
+  assert.ok(flat.some((b) => b.switch_inline_query === 'jehovah-jireh devotional en'));
+  assert.deepEqual(await inline(people.seeker, 'no-such-topic devotional en'), []);
 });
 
-await test('the sharing screen handles cancellation, retry, successful sending, old clients and expired messages', verifyShareScreen);
+await test('every start link fits Telegram limits and every card is valid', async () => {
+  const cards = [];
+  for (const q of ['', 'armor', 'jehovah', 'love']) cards.push(...await inline(people.seeker, q));
+  assert.ok(cards.length >= 10);
+  for (const card of cards) {
+    assert.ok(Buffer.byteLength(card.id) <= 64);
+    assert.ok(card.caption.length <= 1024);
+    const link = card.reply_markup.inline_keyboard.flat().find((b) => b.url?.includes('?start='));
+    assert.match(link.url.split('?start=')[1], /^[A-Za-z0-9_-]{1,64}$/);
+  }
+});
+
+await test('free-text inline search follows the language and does not register the person', async () => {
+  const stranger = { id: 555, first_name: 'New', language_code: 'am' };
+  const results = await inline(stranger, 'ተስፋ');
+  assert.ok(results.length >= 1);
+  assert.match(results[0].caption, /[ሀ-፿]/);
+  assert.equal(query('SELECT count(*) AS n FROM users WHERE id = 555')[0].n, 0);
+  assert.equal(sent('answerInlineQuery')[0].params.is_personal, true);
+});
+
+await test('"Read in the bot" opens the shared article, even for someone new', async () => {
+  const newcomer = { id: 556, first_name: 'New' };
+  await send(newcomer, '/start a_jehovah-jireh_s_am');
+  assert.equal(query('SELECT lang FROM users WHERE id = 556')[0].lang, 'am');
+  assert.ok(buttonData(556).some((d) => d.startsWith('a:1:0:s:am')), buttonData(556).join(','));
+  await send(newcomer, '/start a_no-such-topic_s_am');
+  assert.ok(buttonData(556).includes('T'), 'a dead link falls back to the menu');
+  rawSqlite().exec('DELETE FROM users WHERE id = 556');
+  rawSqlite().exec('DELETE FROM events WHERE user_id = 556');
+});
 
 await test('Bookmarks appears before About us and starts with a personal empty list', async () => {
   await send(people.seeker, '/menu');

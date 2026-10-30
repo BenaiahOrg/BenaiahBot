@@ -23,9 +23,9 @@ admin dashboard. It runs on [Telegram Serverless](https://core.telegram.org/bots
   - 🎧 Narrations are forwarded from the English or Amharic Telegram channel. If Telegram
     refuses forwarding (e.g. protected posts or channel access), a link to the original post is offered.
   - Video, Short and narration buttons appear only when that article and language have them.
-  - ↗️ Share article opens a small Mini App sharing screen and Telegram's chat picker.
-    The shared title is a clickable link, with no raw URL in the message. Available
-    on the article options screen and below the text, in the selected language.
+  - ↗️ Share article opens Telegram's chat picker directly (inline mode; enable it with
+    `/setinline` in BotFather). The chosen chat gets a card with the cover and buttons:
+    Read in the bot, the website, and Share. `@BotName word` also searches from any chat.
   - 🔖 Bookmark saves the selected article and language privately. Remove it from
     the article or the saved list. Bookmarks in the main menu (before About us), or
     `/bookmarks`, reopens saved articles even if the API catalog order changes.

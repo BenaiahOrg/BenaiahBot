@@ -36,6 +36,7 @@ export const calls = [];
 export const failures = {};
 
 const results = {
+  getMe: () => ({ id: 1, is_bot: true, first_name: 'Benaiah', username: 'BenaiahTestBot' }),
   sendMessage: (p) => ({ message_id: nextMessageId++, chat: { id: p.chat_id }, text: p.text }),
   sendPhoto: (p) => ({ message_id: nextMessageId++, chat: { id: p.chat_id }, photo: [{}], caption: p.caption }),
   sendRichMessage: (p) => ({ message_id: nextMessageId++, chat: { id: p.chat_id } }),

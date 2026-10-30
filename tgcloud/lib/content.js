@@ -91,6 +91,24 @@ export function findSubtopic(catalog, ti, si) {
   return subtopic ? { theme, subtopic } : null;
 }
 
+function normalize(text) {
+  return String(text || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+// Subtopics whose titles or descriptions contain the query, in either language.
+export function searchSubtopics(themes, query) {
+  const needle = normalize(query);
+  const results = [];
+  themes.forEach((theme, ti) => theme.subtopics.forEach((subtopic, si) => {
+    const haystack = normalize([
+      theme.title.en, theme.title.am, subtopic.title.en, subtopic.title.am,
+      subtopic.description.en, subtopic.description.am, subtopic.slug,
+    ].join(' '));
+    if (needle && haystack.includes(needle)) results.push({ ti, si, theme, subtopic });
+  }));
+  return results;
+}
+
 // Authors per article and the graphics/narration team; only the subtopic
 // endpoint has these.
 export async function getSubtopicDetail(themeSlug, subtopicSlug) {
