@@ -151,6 +151,16 @@ export async function clearButtons(chatId, messageId) {
   }
 }
 
+export async function editButtons(chatId, messageId, replyMarkup) {
+  if (!messageId) return;
+  try {
+    await api.editMessageReplyMarkup({ chat_id: chatId, message_id: messageId, reply_markup: replyMarkup });
+  } catch (error) {
+    if (!(error instanceof BotApiError)) throw error;
+    // Old messages may no longer be editable; the saved bookmark still works.
+  }
+}
+
 export async function editHtml(chatId, messageId, html, replyMarkup) {
   if (!messageId) return;
   try {

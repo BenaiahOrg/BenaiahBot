@@ -165,6 +165,57 @@
       ...(list.length ? list.map(counselorCard) : [h('div', { class: 'card empty' }, 'No counselors yet. Add the first one above.')]));
   }
 
+  function renderAdmins(list) {
+    const ui = state.data.managementUi;
+    const tab = document.querySelector('[data-tab="admins"]');
+    tab.textContent = ui.admins;
+    tab.hidden = false;
+    const handle = h('input', { id: 'admin-handle', placeholder: ui.handlePlaceholder, required: true, autocomplete: 'off' });
+    const name = h('input', { id: 'admin-name', maxlength: 60, autocomplete: 'off' });
+    const submit = h('button', { type: 'submit', class: 'primary' }, ui.addAdmin);
+    const error = h('p', { class: 'error', role: 'status', hidden: true });
+    const form = h('form', { class: 'card add', onsubmit: async (event) => {
+      event.preventDefault();
+      submit.disabled = true;
+      error.hidden = true;
+      try {
+        await saveAdmin({ action: 'add', handle: handle.value, displayName: name.value });
+        if (tg.showAlert) tg.showAlert(ui.addAdminSuccess);
+      } catch (err) {
+        error.textContent = err.message || ui.failed;
+        error.hidden = false;
+      } finally { submit.disabled = false; }
+    } },
+    h('h2', {}, ui.addAdminTitle), h('p', { class: 'hint' }, ui.adminHint),
+    h('div', { class: 'row' },
+      h('label', {}, ui.handleLabel, handle), h('label', {}, ui.nameLabel, name)), submit, error);
+    $('admins').replaceChildren(form,
+      h('h3', {}, ui.adminList.replace('{count}', list.length)),
+      ...list.map((a) => h('div', { class: 'card counselor' },
+        h('div', { class: 'counselor-head' },
+          h('div', { class: 'who' }, h('strong', {}, a.displayName),
+            h('span', {}, [a.username ? `@${a.username}` : null, `id ${a.userId}`].filter(Boolean).join(' · '))),
+          h('div', { class: 'badges' }, h('span', { class: `badge ${a.owner ? 'info' : 'good'}` }, a.owner ? ui.owner : ui.admin),
+            a.self ? h('span', { class: 'badge' }, ui.you) : null)),
+        a.owner ? h('p', { class: 'hint' }, ui.ownerHint) : null,
+        h('div', { class: 'actions' },
+          a.canRename ? h('button', { onclick: () => editName(a.displayName, (displayName) => saveAdmin({ action: 'update', userId: a.userId, displayName })) }, ui.rename) : null,
+          a.canRemove ? h('button', { class: 'danger', onclick: async () => {
+            if (await confirmDialog(ui.removeAdminConfirm.replace('{name}', a.displayName))) {
+              try { await saveAdmin({ action: 'remove', userId: a.userId }); }
+              catch (err) { showError(err); }
+            }
+          } }, ui.remove) : null))));
+  }
+
+  async function saveAdmin(input) {
+    const result = await call('adminAdminSave', input);
+    state.data.admins = result.admins;
+    renderAdmins(result.admins);
+    if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+    return result;
+  }
+
   function renderRequests(rows) {
     $('requests').replaceChildren(
       h('h3', {}, 'Recent sessions'),
@@ -217,6 +268,7 @@
     $('updated').textContent = `Updated ${new Date(d.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     renderOverview(d);
     renderCounselors(d.counselors);
+    renderAdmins(d.admins);
     renderRequests(d.requests);
     renderContent(d);
   }
@@ -235,7 +287,7 @@
     } catch (err) {
       if (err && err.parameters && err.parameters.code === 'FORBIDDEN') {
         $('blocked').hidden = false;
-        $('blocked').querySelector('p').textContent = 'Your account isn’t on the admin list (ADMIN_IDS).';
+        $('blocked').querySelector('p').textContent = state.data?.managementUi?.accessDenied || err.message || $('blocked').querySelector('p').textContent;
       } else showError(err);
     } finally {
       $('refresh').classList.remove('spin');
@@ -259,9 +311,30 @@
     return new Promise((resolve) => (tg.showConfirm ? tg.showConfirm(text, resolve) : resolve(window.confirm(text))));
   }
 
+  function editName(name, onSave) {
+    const ui = state.data.managementUi;
+    const input = h('input', { id: 'edit-display-name', value: name || '', maxlength: 60 });
+    const submit = h('button', { type: 'submit', class: 'primary' }, ui.save);
+    const error = h('p', { class: 'error', role: 'status', hidden: true });
+    const form = h('form', { class: 'add', onsubmit: async (event) => {
+      event.preventDefault();
+      submit.disabled = true;
+      error.hidden = true;
+      try {
+        await onSave(input.value.trim());
+        $('sheet').hidden = true;
+      } catch (err) {
+        error.textContent = err.message || ui.failed;
+        error.hidden = false;
+      } finally { submit.disabled = false; }
+    } }, h('label', {}, ui.displayName, input), submit, error);
+    $('sheet-content').replaceChildren(h('h2', {}, ui.renameTitle.replace('{name}', name)), form);
+    $('sheet').hidden = false;
+    input.focus();
+  }
+
   function rename(c) {
-    const next = window.prompt('Display name (only admins see it)', c.displayName || '');
-    if (next != null && next.trim() !== c.displayName) save({ action: 'update', id: c.id, displayName: next.trim() }).catch(() => {});
+    editName(c.displayName, (displayName) => save({ action: 'update', id: c.id, displayName }));
   }
 
   async function remove(c) {

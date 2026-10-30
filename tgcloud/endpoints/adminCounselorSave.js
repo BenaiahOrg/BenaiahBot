@@ -8,7 +8,7 @@ import { asEndpoint, requireAdmin } from '../lib/guard.js';
 //   { action: 'remove', id }
 // Returns the refreshed counselor list.
 export default async function (input, ctx) {
-  requireAdmin(ctx);
+  await requireAdmin(ctx);
   return asEndpoint(async () => {
     let result = {};
     if (input.action === 'add') result = await addCounselor(input.handle, input.displayName);

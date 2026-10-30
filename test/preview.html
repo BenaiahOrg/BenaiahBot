@@ -19,6 +19,13 @@
         setTimeout(() => {
           if (name === 'adminDashboard') cb(null, demo.dashboard);
           else if (name === 'adminCounselor') cb(null, demo.counselor);
+          else if (name === 'adminAdminSave') {
+            const list = demo.dashboard.admins;
+            if (input.action === 'add') list.push({ userId: Number(input.handle), displayName: input.displayName || input.handle, owner: false, self: false, canRename: true, canRemove: true });
+            if (input.action === 'update') list.find((a) => a.userId === input.userId).displayName = input.displayName;
+            if (input.action === 'remove') demo.dashboard.admins = list.filter((a) => a.userId !== input.userId);
+            cb(null, { admins: demo.dashboard.admins });
+          }
           else cb(null, { counselors: demo.dashboard.counselors, reachable: true });
         }, 150);
       } },

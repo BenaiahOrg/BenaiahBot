@@ -1,4 +1,4 @@
-import { table, integer, text, json, index } from 'sdk/db';
+import { table, integer, text, json, index, uniqueIndex } from 'sdk/db';
 
 // Times are unix milliseconds (Date.now()). Flags are plain 0/1 integers so raw
 // SQL in the stats queries reads them the same way the query builder does.
@@ -8,7 +8,7 @@ export const users = table('users', {
   firstName: text('first_name'),
   username: text('username'),
   lang: text('lang'),
-  // What the next plain text message means: '' (nothing) or 'search'.
+  // What the next message means: '' (nothing), 'search', or 'broadcast' (admins).
   state: text('state').notNull().default(''),
   blocked: integer('blocked').notNull().default(0),
   createdAt: integer('created_at').notNull(),
@@ -28,6 +28,30 @@ export const counselors = table('counselors', {
   createdAt: integer('created_at').notNull(),
 }, (t) => ({
   usernameIdx: index('idx_counselors_username').on(t.username),
+}));
+
+// Additional admins managed by the Mini App. ADMIN_IDS in .env remain owners.
+// Numeric Telegram IDs bind access to accounts, never to mutable usernames.
+export const admins = table('admins', {
+  userId: integer('user_id').primaryKey(),
+  displayName: text('display_name').notNull().default(''),
+  createdBy: integer('created_by').notNull(),
+  createdAt: integer('created_at').notNull(),
+});
+
+// Stable article slugs survive catalog ordering changes. Bookmarks are private.
+export const bookmarks = table('bookmarks', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull(),
+  themeSlug: text('theme_slug').notNull(),
+  subtopicSlug: text('subtopic_slug').notNull(),
+  articleType: text('article_type').notNull(),
+  lang: text('lang').notNull(),
+  title: text('title').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, (t) => ({
+  userIdx: index('idx_bookmarks_user').on(t.userId, t.createdAt),
+  articleIdx: uniqueIndex('idx_bookmarks_article').on(t.userId, t.themeSlug, t.subtopicSlug, t.articleType, t.lang),
 }));
 
 // One anonymous counseling conversation.
@@ -101,8 +125,8 @@ export const cache = table('cache', {
 });
 
 // An admin's message copied to every user. Only the source message's id is kept.
-// status: draft | sending | done | cancelled. `cursor` is the last user id
-// reached, so sending can resume in a later invocation.
+// status: draft | ready | sending | done | cancelled. `cursor` is the last user
+// reached; startedAt leases the current batch, allowing interrupted sends to resume.
 export const broadcasts = table('broadcasts', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   adminId: integer('admin_id').notNull(),

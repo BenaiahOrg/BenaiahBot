@@ -1,4 +1,6 @@
 import { statsText } from './admin.js';
+import { beginBroadcast, cancelBroadcast, draftBroadcast, sendBroadcastBatch } from './broadcast.js';
+import { findBookmark, getBookmark, removeBookmark, saveBookmark } from './bookmarks.js';
 import {
   acceptOffer, cancelRequest, counselorPanel, declineOffer, introView, rate, requestCounseling, routeMessage,
   setCounselorActive, sweep, userLeft,
@@ -8,15 +10,15 @@ import { escapeHtml } from './format.js';
 import { t } from './i18n.js';
 import { WEBAPP_URL } from './secrets.js';
 import { setupAdmin, setupIfNeeded } from './setup.js';
-import { answer, button, editHtml, keyboard, sendHtml, show } from './ui.js';
+import { answer, button, editButtons, editHtml, keyboard, sendHtml, show } from './ui.js';
 import { counselorByUser, isAdmin, linkCounselor, markBlocked, setLang, setState, touchUser } from './users.js';
 import {
-  aboutPage, aboutView, creditsView, errorView, langChooser, logEvent, mainMenu, randomDevotional, searchView, sendArticle,
+  aboutPage, aboutView, articleView, bookmarksView, creditsView, errorView, langChooser, logEvent, mainMenu, randomDevotional, searchView, sendArticle, sendArticleMedia,
   sendBrand, sendGraphicOriginals, sendGraphics, subtopicView, themesView, themeView, typeFromCode,
 } from './views.js';
 
 function menuFor(user, lang, notice) {
-  return mainMenu(lang, notice, { admin: isAdmin(user.id) });
+  return mainMenu(lang, notice, { admin: user.admin });
 }
 
 function parseCommand(text) {
@@ -38,7 +40,7 @@ async function prepare(from) {
   const linked = await linkCounselor(from);
   if (linked) await safely('counselor welcome', () => sendHtml(from.id, t(user.lang || 'en', 'counselorWelcome')));
   await safely('sweep', sweep);
-  return user;
+  return { ...user, admin: await isAdmin(user.id) };
 }
 
 function subtopicKey(catalog, ti, si) {
@@ -56,7 +58,7 @@ async function sendRandom(chatId, user, lang) {
   const pick = await randomDevotional(lang);
   if (!pick) return show(chatId, null, errorView(lang));
   await logEvent(user.id, 'random', '', lang);
-  return openArticle(chatId, user, lang, pick.ti, pick.si, 'devotional', lang);
+  return show(chatId, null, await articleView(lang, pick.ti, pick.si, 'devotional', lang, user.id));
 }
 
 async function dashboardButton(chatId, lang) {
@@ -70,7 +72,7 @@ async function onCommand(message, user, command) {
   if (command.name !== 'search') await setState(user.id, '');
   switch (command.name) {
     case 'start':
-      if (isAdmin(user.id)) {
+      if (user.admin) {
         await safely('setup', setupIfNeeded);
         await safely('admin setup', () => setupAdmin(user.id));
       }
@@ -81,6 +83,8 @@ async function onCommand(message, user, command) {
       return show(chatId, null, langChooser());
     case 'themes':
       return show(chatId, null, await themesView(lang));
+    case 'bookmarks':
+      return show(chatId, null, await bookmarksView(user.id, lang));
     case 'random':
       return sendRandom(chatId, user, lang);
     case 'search':
@@ -98,11 +102,13 @@ async function onCommand(message, user, command) {
       return show(chatId, null, await counselorPanel(counselor, lang));
     }
     case 'admin':
-      if (!isAdmin(user.id)) return sendHtml(chatId, t(lang, 'adminOnly'));
+      if (!user.admin) return sendHtml(chatId, t(lang, 'adminOnly'));
       return dashboardButton(chatId, lang);
     case 'stats':
-      if (!isAdmin(user.id)) return sendHtml(chatId, t(lang, 'adminOnly'));
+      if (!user.admin) return sendHtml(chatId, t(lang, 'adminOnly'));
       return sendHtml(chatId, await statsText());
+    case 'broadcast':
+      return beginBroadcast(user.id, lang);
     default:
       return show(chatId, null, user.lang ? menuFor(user, lang) : langChooser());
   }
@@ -120,8 +126,10 @@ export async function onMessage(message) {
   const chatId = message.chat.id;
   const lang = user.lang || 'en';
   try {
-    if (await routeMessage(message, user)) return;
     const command = parseCommand(message.text);
+    // Explicit admin composition takes precedence over counseling relays.
+    if (user.state === 'broadcast' && !command) return await draftBroadcast(message, user, lang);
+    if (await routeMessage(message, user)) return;
     if (command) return await onCommand(message, user, command);
     if (!user.lang) return await show(chatId, null, langChooser());
     if (user.state === 'search' && message.text) return await runSearch(chatId, user, lang, message.text);
@@ -143,7 +151,7 @@ export async function onCallback(query) {
   let parts = String(query.data || '').split(':');
   const fresh = parts[parts.length - 1] === 'n';
   if (fresh) parts = parts.slice(0, -1);
-  const [code, a, b, c, d] = parts;
+  const [code, a, b, c, d, e] = parts;
   const target = fresh ? null : query.message;
   const ti = Number(a);
   const si = Number(b);
@@ -154,7 +162,70 @@ export async function onCallback(query) {
   };
 
   try {
+    if (['BM', 'bo', 'bd', 'bs', 'bu'].includes(code) && chatId !== user.id) {
+      await reply(t(lang, 'bookmarksPrivate'), true);
+      return;
+    }
+    if (['BC', 'BCS', 'BCX'].includes(code) && (!user.admin || chatId !== user.id)) {
+      await reply(t(lang, 'adminOnly'), true);
+      return;
+    }
+    if (user.state === 'broadcast' && !['BC', 'BCS', 'BCX'].includes(code)) await setState(user.id, '');
     switch (code) {
+      case 'BM':
+        await show(chatId, target, await bookmarksView(user.id, lang, Number(a) || 0));
+        break;
+      case 'bo': {
+        const saved = await getBookmark(user.id, Number(a));
+        if (!saved) { await reply(t(lang, 'bookmarkMissing'), true); break; }
+        const catalog = await getCatalog();
+        const savedTi = catalog.themes.findIndex((theme) => theme.slug === saved.themeSlug);
+        const savedSi = catalog.themes[savedTi]?.subtopics.findIndex((topic) => topic.slug === saved.subtopicSlug);
+        if (savedSi == null || savedSi < 0 || !catalog.themes[savedTi].subtopics[savedSi].articles[saved.articleType]?.[saved.lang]) {
+          await reply(t(lang, 'bookmarkUnavailable'), true); break;
+        }
+        await reply();
+        await show(chatId, target, await articleView(lang, savedTi, savedSi, saved.articleType, saved.lang, user.id));
+        break;
+      }
+      case 'bd':
+        await reply(t(lang, await removeBookmark(user.id, Number(a)) ? 'bookmarkRemoved' : 'bookmarkMissing'));
+        await show(chatId, target, await bookmarksView(user.id, lang, Number(b) || 0));
+        break;
+      case 'bs':
+      case 'bu': {
+        const type = typeFromCode(c);
+        const articleLang = d === 'am' ? 'am' : 'en';
+        if (!type || chatId !== user.id) break;
+        const found = findSubtopic(await getCatalog(), ti, si);
+        if (!found?.subtopic.articles[type]?.[articleLang]) { await reply(t(lang, 'bookmarkUnavailable'), true); break; }
+        const saved = code === 'bs';
+        if (saved) await saveBookmark(user.id, found.theme, found.subtopic, type, articleLang);
+        else {
+          const row = await findBookmark(user.id, found.theme.slug, found.subtopic.slug, type, articleLang);
+          if (row) await removeBookmark(user.id, row.id);
+        }
+        await reply(t(lang, saved ? 'bookmarkSaved' : 'bookmarkRemoved'));
+        if (query.message?.reply_markup) {
+          const markup = { inline_keyboard: query.message.reply_markup.inline_keyboard.map((row) => row.map((item) =>
+            item.callback_data === query.data ? { ...item, text: t(lang, saved ? 'removeBookmark' : 'saveBookmark'),
+              callback_data: `${saved ? 'bu' : 'bs'}:${ti}:${si}:${c}:${articleLang}${fresh ? ':n' : ''}` } : item)) };
+          await editButtons(chatId, query.message.message_id, markup);
+        }
+        break;
+      }
+      case 'BC':
+        await reply();
+        await beginBroadcast(user.id, lang);
+        break;
+      case 'BCS':
+        await reply();
+        await sendBroadcastBatch(user.id, Number(a), lang);
+        break;
+      case 'BCX':
+        await reply();
+        await cancelBroadcast(user.id, Number(a) || 0, lang);
+        break;
       case 'L': {
         const chosen = a === 'am' ? 'am' : 'en';
         await setLang(user.id, chosen);
@@ -198,14 +269,32 @@ export async function onCallback(query) {
         await openArticle(chatId, user, lang, ti, si, type, d === 'am' ? 'am' : 'en');
         break;
       }
+      case 'v': {
+        const type = typeFromCode(c);
+        if (!type) break;
+        await reply();
+        await show(chatId, target, await articleView(lang, ti, si, type, d === 'am' ? 'am' : 'en', user.id));
+        break;
+      }
+      case 'av':
+      case 'an': {
+        const type = typeFromCode(c);
+        if (!type) break;
+        const articleLang = d === 'am' ? 'am' : 'en';
+        const kind = code === 'an' ? 'narration' : e === 's' ? 'short' : 'video';
+        await reply();
+        await sendArticleMedia(chatId, lang, ti, si, type, articleLang, kind);
+        await logEvent(user.id, kind, `${subtopicKey(await getCatalog(), ti, si)}/${type}_${articleLang}`, articleLang);
+        break;
+      }
       case 'g':
         await reply();
-        await sendGraphics(chatId, lang, ti, si, c === 'y' ? 'y' : 'q');
+        await sendGraphics(chatId, lang, ti, si, c === 'y' ? 'y' : 'q', typeFromCode(d), e === 'en' || e === 'am' ? e : lang);
         await logEvent(user.id, 'graphics', `${subtopicKey(await getCatalog(), ti, si)}/${c === 'y' ? 'story' : 'square'}`, lang);
         break;
       case 'gd':
         await reply(t(lang, 'preparing'));
-        await sendGraphicOriginals(chatId, lang, ti, si, c === 'y' ? 'y' : 'q');
+        await sendGraphicOriginals(chatId, lang, ti, si, c === 'y' ? 'y' : 'q', typeFromCode(d), e === 'en' || e === 'am' ? e : lang);
         await logEvent(user.id, 'download', `${subtopicKey(await getCatalog(), ti, si)}/${c === 'y' ? 'story' : 'square'}`, lang);
         break;
       case 'R':

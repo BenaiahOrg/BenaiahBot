@@ -3,17 +3,21 @@ import { eq } from 'sdk/db';
 import { cache } from '../schema.js';
 import { API_ORIGIN, ARTICLE_TTL_MS, ARTICLE_TYPES, CATALOG_TTL_MS, LANGS } from './constants.js';
 
+// Older catalog responses have no media fields. Never reuse that cache after
+// upgrading to the media-aware API contract, even while its TTL is still fresh.
+export const CATALOG_CACHE_KEY = 'catalog:media-v1';
+
 // Fetches a Benaiah API path through the cache table. A stale copy is served
 // when the API is unreachable, so the bot keeps working through outages.
-async function getJson(path, ttl) {
-  const row = await db.select().from(cache).where(eq(cache.key, path)).get();
+async function getJson(path, ttl, cacheKey = path) {
+  const row = await db.select().from(cache).where(eq(cache.key, cacheKey)).get();
   if (row && Date.now() - row.fetchedAt < ttl) return row.payload;
   try {
     const res = await fetch(`${API_ORIGIN}${path}`, { headers: { Accept: 'application/json' } });
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`Benaiah API ${res.status} for ${path}`);
     const payload = await res.json();
-    await db.insert(cache).values({ key: path, fetchedAt: Date.now(), payload })
+    await db.insert(cache).values({ key: cacheKey, fetchedAt: Date.now(), payload })
       .onConflictDoUpdate({ target: cache.key, set: { fetchedAt: Date.now(), payload } })
       .run();
     return payload;
@@ -46,8 +50,18 @@ function subtopicSlug(subtopic) {
 
 function normalizeSubtopic(raw) {
   const articles = {};
+  const media = {};
   for (const type of ARTICLE_TYPES) {
     articles[type] = { en: raw.articles?.[type]?.en || null, am: raw.articles?.[type]?.am || null };
+    media[type] = {};
+    for (const lang of LANGS) {
+      const entry = raw.media?.[type]?.[lang];
+      media[type][lang] = {
+        video: audioUrl(entry?.video),
+        short: audioUrl(entry?.short),
+        narration: telegramPost(entry?.narration) ? entry.narration.trim() : '',
+      };
+    }
   }
   return {
     slug: subtopicSlug(raw),
@@ -57,11 +71,12 @@ function normalizeSubtopic(raw) {
     square: imageList(raw.images, 'square'),
     story: imageList(raw.images, 'story'),
     articles,
+    media,
   };
 }
 
 export async function getCatalog() {
-  const raw = await getJson('/api/v1/articles', CATALOG_TTL_MS);
+  const raw = await getJson('/api/v1/articles', CATALOG_TTL_MS, CATALOG_CACHE_KEY);
   const themes = (Array.isArray(raw) ? raw : []).map((theme) => ({
     slug: theme.slug,
     title: pair(theme.title),
@@ -109,6 +124,16 @@ export function audioUrl(audio) {
   if (youtube) return `https://www.youtube.com/watch?v=${youtube[1]}`;
   if (/^https?:\/\//.test(value)) return value;
   return '';
+}
+
+// Public channel post links and private /c/ links use different chat IDs.
+export function telegramPost(url) {
+  const match = /^https:\/\/(?:t\.me|telegram\.me)\/(?:s\/)?([a-zA-Z][a-zA-Z0-9_]{3,31}|c\/[1-9]\d*)\/([1-9]\d*)(?:[?#].*)?$/.exec(String(url || '').trim());
+  if (!match || !Number.isSafeInteger(Number(match[2]))) return null;
+  return {
+    from_chat_id: match[1].startsWith('c/') ? `-100${match[1].slice(2)}` : `@${match[1]}`,
+    message_id: Number(match[2]),
+  };
 }
 
 // The website addresses articles by English titles, as its RSS feed does.

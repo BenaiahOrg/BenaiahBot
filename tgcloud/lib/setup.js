@@ -2,10 +2,11 @@ import { api, db, BotApiError } from 'sdk';
 import { eq } from 'sdk/db';
 import { cache } from '../schema.js';
 import { addCounselor } from './admin.js';
+import { t } from './i18n.js';
 import { ADMIN_IDS, SEED_COUNSELORS, WEBAPP_URL } from './secrets.js';
 
 // Bump when commands change so the next admin /start reapplies them.
-const SETUP_VERSION = 1;
+const SETUP_VERSION = 3;
 const SETUP_KEY = 'setup:version';
 
 const COMMANDS = {
@@ -16,6 +17,7 @@ const COMMANDS = {
     { command: 'search', description: 'Search topics' },
     { command: 'counsel', description: 'Anonymous counseling' },
     { command: 'language', description: 'Change language' },
+    { command: 'bookmarks', description: t('en', 'bookmarksCommand') },
   ],
   am: [
     { command: 'start', description: 'ዋና ማውጫ' },
@@ -24,6 +26,7 @@ const COMMANDS = {
     { command: 'search', description: 'ርዕሶችን ይፈልጉ' },
     { command: 'counsel', description: 'ሚስጥራዊ ምክር' },
     { command: 'language', description: 'ቋንቋ ይቀይሩ' },
+    { command: 'bookmarks', description: t('am', 'bookmarksCommand') },
   ],
 };
 
@@ -31,6 +34,7 @@ const ADMIN_COMMANDS = [
   ...COMMANDS.en,
   { command: 'admin', description: 'Open the admin dashboard' },
   { command: 'stats', description: 'Quick statistics' },
+  { command: 'broadcast', description: t('en', 'broadcastCommand') },
 ];
 
 async function attempt(label, call) {

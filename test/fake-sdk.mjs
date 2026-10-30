@@ -47,6 +47,8 @@ const results = {
   }),
   sendDocument: (p) => ({ message_id: nextMessageId, chat: { id: p.chat_id }, document: { file_id: typeof p.document === 'string' ? p.document : `file-${nextMessageId++}` } }),
   copyMessage: () => ({ message_id: nextMessageId++ }),
+  forwardMessage: (p) => ({ message_id: nextMessageId++, chat: { id: p.chat_id } }),
+  savePreparedInlineMessage: () => ({ id: `prepared-${nextMessageId++}`, expiration_date: Math.floor(Date.now() / 1000) + 86400 }),
   copyMessages: (p) => p.message_ids.map(() => ({ message_id: nextMessageId++ })),
 };
 

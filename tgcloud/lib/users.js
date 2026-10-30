@@ -1,10 +1,17 @@
 import { db } from 'sdk';
 import { and, eq, isNull } from 'sdk/db';
-import { counselors, users } from '../schema.js';
+import { admins, counselors, users } from '../schema.js';
 import { ADMIN_IDS } from './secrets.js';
 
-export function isAdmin(userId) {
+export function isOwner(userId) {
   return ADMIN_IDS.includes(Number(userId));
+}
+
+export async function isAdmin(userId) {
+  const id = Number(userId);
+  if (!Number.isSafeInteger(id) || id <= 0) return false;
+  if (isOwner(id)) return true;
+  return Boolean(await db.select({ userId: admins.userId }).from(admins).where(eq(admins.userId, id)).get());
 }
 
 // Records the sender and returns their row. `isNew` is true on first contact.

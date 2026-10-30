@@ -11,17 +11,30 @@ admin dashboard. It runs on [Telegram Serverless](https://core.telegram.org/bots
 
 - Language chooser on first `/start`; switch any time with 🌐 or `/language`.
 - The welcome message explains the name: Benaiah (בניה, Bana-yah) means “God has created / built”.
-- Themes → topics → a topic card with its cover image and buttons for:
-  - 📖 Devotional and 📝 Study material, each sent as one rich message (heading,
-    date, authors, links), with buttons to read the other language or the other type.
+- Themes → topics → a topic card with its cover image, 📖 Devotional and 📝 Study
+  material choices, and ✍️ Credits (authors, design and narration team).
+- Choosing a devotional or study material opens its own options in the selected language:
+  - 📖 Read sends one rich message (heading, date, authors, links), with buttons to
+    switch language or article type and return to its options.
   - 🖼 Square graphics and 📱 story graphics, sent as photo albums (resized by Cloudinary, since
     Telegram won't fetch photos over 5 MB) with a 📥 Download originals button that sends the
     full-size PNGs as files. Each original is uploaded once; later requests reuse its Telegram file id.
-  - ✍️ Credits: authors per article, plus the design and narration team.
+  - 🎬 Videos and 📽 Shorts are sent as YouTube links with previews and watch buttons.
+  - 🎧 Narrations are forwarded from the English or Amharic Telegram channel. If Telegram
+    refuses forwarding (e.g. protected posts or channel access), a link to the original post is offered.
+  - Video, Short and narration buttons appear only when that article and language have them.
+  - ↗️ Share article opens a small Mini App sharing screen and Telegram's chat picker.
+    The shared title is a clickable link, with no raw URL in the message. Available
+    on the article options screen and below the text, in the selected language.
+  - 🔖 Bookmark saves the selected article and language privately. Remove it from
+    the article or the saved list. Bookmarks in the main menu (before About us), or
+    `/bookmarks`, reopens saved articles even if the API catalog order changes.
 - 🎲 Random devotional, 🔎 search (titles and descriptions, both languages), link to the website.
 - ℹ️ About us: mission, the meaning of the name and origin story, how we work, the team, and
   contact/social links, all in the site's own English and Amharic wording.
-- 🎨 Brand assets: the logo as photos plus the original files (transparent PNG, white-on-black,
+- 🐞 Bugs & feature requests (inside About us): opens the Benaiah contact chat with
+  an editable bug report or feature request template in the user's language.
+- 🎨 Brand assets (inside About us): the logo as photos plus the original files (transparent PNG, white-on-black,
   black-on-white), looked up on benaiah.org daily so new uploads are picked up.
 - If benaiah.org is down, the last cached copy is served.
 
@@ -51,10 +64,32 @@ is never stored, only counts.
 - Counselors: add by @username or numeric id, rename, pause/resume, remove; per
   counselor offers, accepts, declines, no-answers, accept rate, response time,
   sessions, ratings and their recent history.
+- Admins: add by numeric Telegram user ID or a known @username, rename, and remove.
+  New admins can use the dashboard, manage admins and counselors, and broadcast.
+  Access is bound to the numeric account ID. `.env` admins remain protected owners;
+  admins cannot remove themselves. Revoking access takes effect on the next request.
 - Sessions: recent requests (anonymous) with status, wait, duration and rating.
 - Content: most-read articles, top searches, reading language.
 
 `/stats` gives admins a text summary in the chat.
+
+**Admin broadcasts**
+
+- Admins get a 📣 Broadcast button in the main menu and a `/broadcast` command.
+- Send or forward one text or media message to the bot. It copies a preview back to
+  the admin and shows the number of reachable recipients. Formatting and captions
+  are preserved; albums must be sent as individual messages.
+- Tap **Send to everyone** to confirm, or **Cancel broadcast** to discard it.
+  The preview is the source of the delivered copies, so later edits to the original
+  message cannot change what was reviewed. Admin controls are not copied to recipients.
+- Delivery runs in batches of 20. Tap **Continue sending** for the next batch;
+  `/broadcast` reopens an unfinished broadcast. Progress shows delivered, blocked
+  and failed counts. Telegram rate limits pause delivery and display the wait time.
+- Only the admin who created a broadcast can send or cancel it. Cancelling stops
+  future deliveries; copies already delivered remain with recipients.
+
+The welcome photo is the supplied image in `webapp/assets/welcome.png`, served
+from this bot's Mini App host. The counseling button uses Telegram's default color.
 
 ## Deploy
 

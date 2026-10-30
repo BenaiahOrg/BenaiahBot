@@ -1,10 +1,11 @@
-import { db, BotApiError } from 'sdk';
+import { api, db, BotApiError } from 'sdk';
 import { events } from '../schema.js';
 import { brandAssets } from './brand.js';
+import { findBookmark, listBookmarks } from './bookmarks.js';
 import { WEBAPP_URL } from './secrets.js';
 import { ARTICLE_TYPES, SEARCH_RESULTS, SITE_URL, SOCIAL_LINKS, SUBTOPICS_PER_PAGE, TEAM, WELCOME_PHOTO } from './constants.js';
 import {
-  articleWebUrl, audioUrl, findSubtopic, getArticle, getCatalog, getSubtopicDetail, personName, personRole, pick,
+  articleWebUrl, audioUrl, findSubtopic, getArticle, getCatalog, getSubtopicDetail, personName, personRole, pick, telegramPost,
 } from './content.js';
 import { fileName, photoUrl, sendAlbum, sendOriginals } from './files.js';
 import { clip, escapeHtml, markdownToHtml } from './format.js';
@@ -39,12 +40,13 @@ export function langChooser() {
 export function mainMenu(lang, notice, { admin = false } = {}) {
   return {
     html: notice ? `${notice}\n\n${t(lang, 'welcome')}` : t(lang, 'welcome'),
-    photo: WELCOME_PHOTO,
+    photo: WEBAPP_URL ? `${WEBAPP_URL.replace(/\/$/, '')}${WELCOME_PHOTO}` : undefined,
     keyboard: keyboard([
       [button(t(lang, 'menuThemes'), 'T', 'primary')],
       [button(t(lang, 'menuRandom'), 'R'), button(t(lang, 'menuSearch'), 'S')],
       [button(t(lang, 'menuCounsel'), 'C')],
-      [button(t(lang, 'menuAbout'), 'A'), button(t(lang, 'menuBrand'), 'B')],
+      [button(t(lang, 'menuBookmarks'), 'BM:0')],
+      [button(t(lang, 'menuAbout'), 'A')],
       [button(t(lang, 'menuLang'), 'G'), urlButton(t(lang, 'menuSite'), SITE_URL)],
       admin ? [button(t(lang, 'menuBroadcast'), 'BC'), ...(WEBAPP_URL ? [{ text: t(lang, 'dashboard'), web_app: { url: WEBAPP_URL } }] : [])] : null,
     ]),
@@ -58,6 +60,7 @@ export function aboutView(lang) {
       [button(t(lang, 'aboutMission'), 'A:m'), button(t(lang, 'aboutName'), 'A:o')],
       [button(t(lang, 'aboutHow'), 'A:w'), button(t(lang, 'aboutTeam'), 'A:t')],
       [button(t(lang, 'menuBrand'), 'B'), button(t(lang, 'aboutContact'), 'A:c')],
+      [button(t(lang, 'aboutFeedback'), 'A:f')],
       [urlButton(t(lang, 'aboutChannel'), SOCIAL_LINKS.channel), urlButton(t(lang, 'aboutApp'), SOCIAL_LINKS.app)],
       [button(t(lang, 'home'), 'M')],
     ]),
@@ -66,9 +69,19 @@ export function aboutView(lang) {
 
 const ABOUT_PAGES = { m: 'pageMission', o: 'pageName', w: 'pageHow' };
 
-// One of the About sub-pages: m(ission), o(ur name), w(ork), t(eam), c(ontact).
+// One of the About sub-pages: mission, name, work, team, contact or feedback.
 export function aboutPage(lang, page) {
   const nav = [button(t(lang, 'back'), 'A'), button(t(lang, 'home'), 'M')];
+  if (page === 'f') {
+    return {
+      html: t(lang, 'pageFeedback'),
+      keyboard: keyboard([
+        [urlButton(t(lang, 'reportBug'), `${SOCIAL_LINKS.contact}?text=${encodeURIComponent(t(lang, 'bugReportDraft'))}`)],
+        [urlButton(t(lang, 'requestFeature'), `${SOCIAL_LINKS.contact}?text=${encodeURIComponent(t(lang, 'featureRequestDraft'))}`)],
+        nav,
+      ]),
+    };
+  }
   if (page === 't') {
     const roles = t(lang, 'teamRoles');
     const lines = Object.entries(TEAM).map(([role, names]) => `<b>${escapeHtml(roles[role])}</b>\n${names.map(escapeHtml).join(' · ')}`);
@@ -140,13 +153,9 @@ export async function themeView(lang, ti, page) {
 
 function subtopicKeyboard(lang, ti, si, subtopic) {
   const has = (type) => Boolean(subtopic.articles[type].en || subtopic.articles[type].am);
-  const articleButtons = ARTICLE_TYPES.filter(has).map((type) => button(t(lang, type), `a:${ti}:${si}:${TYPE_CODE[type]}:${lang}`, 'primary'));
-  const graphicButtons = [];
-  if (subtopic.square[lang].length || subtopic.square.en.length) graphicButtons.push(button(t(lang, 'graphics'), `g:${ti}:${si}:q`));
-  if (subtopic.story[lang].length || subtopic.story.en.length) graphicButtons.push(button(t(lang, 'story'), `g:${ti}:${si}:y`));
+  const articleButtons = ARTICLE_TYPES.filter(has).map((type) => button(t(lang, type), `v:${ti}:${si}:${TYPE_CODE[type]}:${lang}`, 'primary'));
   return keyboard([
     articleButtons,
-    graphicButtons,
     [button(t(lang, 'credits'), `c:${ti}:${si}`)],
     [button(t(lang, 'back'), `t:${ti}:${Math.floor(si / SUBTOPICS_PER_PAGE)}`), button(t(lang, 'home'), 'M')],
   ]);
@@ -168,6 +177,112 @@ export async function subtopicView(lang, ti, si) {
     photo: photoUrl(pick(subtopic.covers, lang)) || undefined,
     keyboard: subtopicKeyboard(lang, ti, si, subtopic),
   };
+}
+
+function articleLanguage(subtopic, type, preferred) {
+  if (subtopic.articles[type]?.[preferred]) return preferred;
+  const other = preferred === 'am' ? 'en' : 'am';
+  return subtopic.articles[type]?.[other] ? other : null;
+}
+
+function articleShareButton(lang, theme, subtopic, type, articleLang) {
+  const params = { theme: theme.slug, subtopic: subtopic.slug, type, lang: articleLang, uiLang: lang };
+  const query = Object.entries(params).map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('&');
+  return { text: t(lang, 'shareArticle'), web_app: { url: `${WEBAPP_URL.replace(/\/$/, '')}/share.html?${query}` } };
+}
+
+async function articleBookmarkButton(lang, userId, ti, si, theme, subtopic, type, articleLang, fresh = false) {
+  if (!userId) return null;
+  const saved = await findBookmark(userId, theme.slug, subtopic.slug, type, articleLang);
+  return button(t(lang, saved ? 'removeBookmark' : 'saveBookmark'),
+    `${saved ? 'bu' : 'bs'}:${ti}:${si}:${TYPE_CODE[type]}:${articleLang}${fresh ? ':n' : ''}`);
+}
+
+export async function bookmarksView(userId, lang, page = 0) {
+  const saved = await listBookmarks(userId, page);
+  const rows = saved.rows.map((row) => [
+    button(`${clip(row.title, 45)} · ${t(lang, row.articleType)} · ${t(row.lang, 'langName')}`, `bo:${row.id}`),
+    button(t(lang, 'deleteBookmark'), `bd:${row.id}:${saved.page}`),
+  ]);
+  if (saved.pages > 1) rows.push([
+    saved.page > 0 ? button(t(lang, 'prev'), `BM:${saved.page - 1}`) : button(' ', 'noop'),
+    button(`${saved.page + 1}/${saved.pages}`, 'noop'),
+    saved.page < saved.pages - 1 ? button(t(lang, 'next'), `BM:${saved.page + 1}`) : button(' ', 'noop'),
+  ]);
+  rows.push([button(t(lang, 'home'), 'M')]);
+  return { html: t(lang, saved.total ? 'bookmarksTitle' : 'bookmarksEmpty', saved.total), keyboard: keyboard(rows) };
+}
+
+function articleActions(lang, ti, si, type, readLang, subtopic, fresh = false) {
+  const context = `${ti}:${si}:${TYPE_CODE[type]}:${readLang}`;
+  const suffix = fresh ? ':n' : '';
+  const media = subtopic.media[type][readLang];
+  return [
+    [button(t(lang, 'read'), `a:${context}${suffix}`, 'primary')],
+    [
+      graphicSet(subtopic, readLang, 'q').length ? button(t(lang, 'graphics'), `g:${ti}:${si}:q:${TYPE_CODE[type]}:${readLang}${suffix}`) : null,
+      graphicSet(subtopic, readLang, 'y').length ? button(t(lang, 'story'), `g:${ti}:${si}:y:${TYPE_CODE[type]}:${readLang}${suffix}`) : null,
+    ].filter(Boolean),
+    [
+      media.video ? button(t(lang, 'watchVideo'), `av:${context}:v${suffix}`) : null,
+      media.short ? button(t(lang, 'watchShort'), `av:${context}:s${suffix}`) : null,
+    ].filter(Boolean),
+    media.narration ? [button(t(lang, 'listenNarration'), `an:${context}${suffix}`)] : null,
+  ];
+}
+
+// Choose the article type first, then offer only its own language's media.
+export async function articleView(lang, ti, si, type, articleLang, userId) {
+  const found = findSubtopic(await getCatalog(), ti, si);
+  if (!found) return themesView(lang);
+  const { theme, subtopic } = found;
+  const readLang = articleLanguage(subtopic, type, articleLang);
+  if (!readLang) return { html: t(lang, 'notAvailable'), keyboard: keyboard([[button(t(lang, 'back'), `s:${ti}:${si}`)]]) };
+  const otherLang = readLang === 'en' ? 'am' : 'en';
+  return {
+    html: [
+      `<b>${escapeHtml(pick(subtopic.title, readLang))}</b>`,
+      `<i>${escapeHtml(pick(theme.title, readLang))} · ${t(lang, type)} · ${t(readLang, 'langName')}</i>`,
+      t(lang, 'chooseFormat'),
+    ].join('\n\n'),
+    photo: photoUrl(pick(subtopic.covers, readLang)) || undefined,
+    keyboard: keyboard([
+      ...articleActions(lang, ti, si, type, readLang, subtopic),
+      [articleShareButton(lang, theme, subtopic, type, readLang),
+        await articleBookmarkButton(lang, userId, ti, si, theme, subtopic, type, readLang)].filter(Boolean),
+      subtopic.articles[type][otherLang] ? [button(t(readLang, 'readIn'), `v:${ti}:${si}:${TYPE_CODE[type]}:${otherLang}`)] : null,
+      [button(t(lang, 'back'), `s:${ti}:${si}`), button(t(lang, 'home'), 'M')],
+    ]),
+  };
+}
+
+export async function sendArticleMedia(chatId, lang, ti, si, type, articleLang, kind) {
+  const found = findSubtopic(await getCatalog(), ti, si);
+  if (!found) return sendHtml(chatId, t(lang, 'loadError'));
+  const { subtopic } = found;
+  const back = [button(t(lang, 'back'), `v:${ti}:${si}:${TYPE_CODE[type]}:${articleLang}:n`), button(t(lang, 'home'), 'M:n')];
+  const url = subtopic.articles[type]?.[articleLang] && subtopic.media[type][articleLang]?.[kind];
+  if (!url) return sendHtml(chatId, t(lang, 'noMedia'), keyboard([back]));
+  const label = `${t(lang, kind === 'narration' ? 'listenNarration' : kind === 'short' ? 'watchShort' : 'watchVideo')} — <b>${escapeHtml(pick(subtopic.title, articleLang))}</b> · ${t(lang, type)}`;
+  if (kind === 'narration') {
+    try {
+      await api.forwardMessage({ chat_id: chatId, ...telegramPost(url) });
+    } catch (error) {
+      if (!(error instanceof BotApiError)) throw error;
+      return sendHtml(chatId, t(lang, 'narrationUnavailable'), keyboard([
+        [urlButton(t(lang, 'listenNarration'), url)], back,
+      ]));
+    }
+    return sendHtml(chatId, label, keyboard([back]));
+  }
+  // YouTube watch/Short URLs aren't video files that sendVideo can upload.
+  return api.sendMessage({
+    chat_id: chatId,
+    text: `${label}\n\n${escapeHtml(url)}`,
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: false, url, prefer_large_media: true },
+    reply_markup: keyboard([[urlButton(t(lang, kind === 'short' ? 'watchShort' : 'watchVideo'), url)], back]),
+  });
 }
 
 function peopleLine(people, lang) {
@@ -204,7 +319,7 @@ export async function creditsView(lang, ti, si) {
 
 // Sends an article as a new message. `articleLang` may differ from the UI
 // language when the user asks for the other translation.
-export async function sendArticle(chatId, lang, ti, si, type, articleLang) {
+export async function sendArticle(chatId, lang, ti, si, type, articleLang, userId = chatId) {
   const catalog = await getCatalog();
   const found = findSubtopic(catalog, ti, si);
   if (!found) return sendHtml(chatId, t(lang, 'loadError'));
@@ -247,15 +362,21 @@ export async function sendArticle(chatId, lang, ti, si, type, articleLang) {
   ].filter(Boolean).join('\n\n');
 
   const otherType = ARTICLE_TYPES.find((other) => other !== type);
-  const rows = [];
+  const rows = articleActions(lang, ti, si, type, readLang, subtopic, true).slice(1);
   if (subtopic.articles[type][readLang === 'en' ? 'am' : 'en']) {
-    rows.push([button(t(readLang, 'readIn'), `a:${ti}:${si}:${TYPE_CODE[type]}:${readLang === 'en' ? 'am' : 'en'}:n`)]);
+    rows.push([button(t(readLang, 'readIn'), `v:${ti}:${si}:${TYPE_CODE[type]}:${readLang === 'en' ? 'am' : 'en'}:n`)]);
   }
   if (subtopic.articles[otherType][readLang] || subtopic.articles[otherType][lang]) {
-    rows.push([button(t(lang, otherType), `a:${ti}:${si}:${TYPE_CODE[otherType]}:${lang}:n`)]);
+    rows.push([button(t(lang, otherType), `v:${ti}:${si}:${TYPE_CODE[otherType]}:${lang}:n`)]);
   }
-  rows.push([button(t(lang, 'back'), `s:${ti}:${si}:n`), button(t(lang, 'home'), 'M:n')]);
-  rows.push([urlButton(t(lang, 'menuSite'), articleWebUrl(theme, subtopic, type, readLang))]);
+  rows.push([button(t(lang, 'back'), `v:${ti}:${si}:${TYPE_CODE[type]}:${readLang}:n`), button(t(lang, 'home'), 'M:n')]);
+  rows.push([
+    articleShareButton(lang, theme, subtopic, type, readLang),
+    await articleBookmarkButton(lang, userId, ti, si, theme, subtopic, type, readLang, true),
+  ].filter(Boolean));
+  rows.push([
+    urlButton(t(lang, 'menuSite'), articleWebUrl(theme, subtopic, type, readLang)),
+  ]);
 
   return sendLong(chatId, { markdown, fallbackHtml, replyMarkup: keyboard(rows) });
 }
@@ -268,13 +389,14 @@ function graphicSet(subtopic, lang, kind) {
 // Sends a subtopic's square or story graphics as a photo album (resized, so
 // Telegram accepts them), then a message with navigation and a button for the
 // uncompressed originals.
-export async function sendGraphics(chatId, lang, ti, si, kind) {
+export async function sendGraphics(chatId, lang, ti, si, kind, type, articleLang = lang) {
   const catalog = await getCatalog();
   const found = findSubtopic(catalog, ti, si);
   if (!found) return sendHtml(chatId, t(lang, 'loadError'));
   const { subtopic } = found;
-  const urls = graphicSet(subtopic, lang, kind);
-  const back = [button(t(lang, 'back'), `s:${ti}:${si}:n`), button(t(lang, 'home'), 'M:n')];
+  const urls = graphicSet(subtopic, articleLang, kind);
+  const context = type ? `:${TYPE_CODE[type]}:${articleLang}` : '';
+  const back = [button(t(lang, 'back'), type ? `v:${ti}:${si}:${TYPE_CODE[type]}:${articleLang}:n` : `s:${ti}:${si}:n`), button(t(lang, 'home'), 'M:n')];
   if (!urls.length) return sendHtml(chatId, t(lang, 'noGraphics'), keyboard([back]));
   try {
     await sendAlbum(chatId, urls);
@@ -283,22 +405,22 @@ export async function sendGraphics(chatId, lang, ti, si, kind) {
     // Telegram couldn't fetch an image; the originals button still works.
     console.warn('graphics album failed', error.description);
   }
-  const label = `${kind === 'y' ? t(lang, 'story') : t(lang, 'graphics')} — <b>${escapeHtml(pick(subtopic.title, lang))}</b>`;
+  const label = `${kind === 'y' ? t(lang, 'story') : t(lang, 'graphics')} — <b>${escapeHtml(pick(subtopic.title, articleLang))}</b>`;
   return sendHtml(chatId, kind === 'y' ? `${label}\n${t(lang, 'storyHint')}` : label, keyboard([
-    [button(t(lang, 'downloadOriginals'), `gd:${ti}:${si}:${kind}`, 'primary')],
+    [button(t(lang, 'downloadOriginals'), `gd:${ti}:${si}:${kind}${context}`, 'primary')],
     back,
   ]));
 }
 
-export async function sendGraphicOriginals(chatId, lang, ti, si, kind) {
+export async function sendGraphicOriginals(chatId, lang, ti, si, kind, type, articleLang = lang) {
   const catalog = await getCatalog();
   const found = findSubtopic(catalog, ti, si);
   if (!found) return sendHtml(chatId, t(lang, 'loadError'));
   const { subtopic } = found;
-  const urls = graphicSet(subtopic, lang, kind);
+  const urls = graphicSet(subtopic, articleLang, kind);
   const prefix = `${subtopic.slug}-${kind === 'y' ? 'story' : 'square'}`;
   await sendOriginals(chatId, urls.map((url, n) => ({ url, name: `${prefix}-${n + 1}.${fileName(url, 'x.png').split('.').pop()}` })));
-  return sendHtml(chatId, t(lang, 'originalsReady'), keyboard([[button(t(lang, 'back'), `s:${ti}:${si}:n`), button(t(lang, 'home'), 'M:n')]]));
+  return sendHtml(chatId, t(lang, 'originalsReady'), keyboard([[button(t(lang, 'back'), type ? `v:${ti}:${si}:${TYPE_CODE[type]}:${articleLang}:n` : `s:${ti}:${si}:n`), button(t(lang, 'home'), 'M:n')]]));
 }
 
 export async function randomDevotional(lang) {

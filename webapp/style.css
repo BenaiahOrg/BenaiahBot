@@ -87,6 +87,8 @@ main { padding: 0 16px 32px; }
 .bar-list .track i { display: block; height: 100%; background: var(--accent); }
 
 .add .row { display: grid; gap: 8px; margin: 10px 0; }
+.add label { display: grid; gap: 5px; color: var(--muted); font-size: 13px; }
+.sheet-body .add { display: grid; gap: 14px; margin-top: 18px; }
 @media (min-width: 560px) { .add .row { grid-template-columns: 1fr 1fr; } }
 .hint { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
 input {

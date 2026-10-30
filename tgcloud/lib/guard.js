@@ -3,9 +3,9 @@ import { AdminError } from './admin.js';
 import { isAdmin } from './users.js';
 
 // Endpoints run only for verified Mini App users; this narrows them to admins.
-export function requireAdmin(ctx) {
+export async function requireAdmin(ctx) {
   const userId = ctx?.initData?.user?.id;
-  if (!userId || !isAdmin(userId)) throw new EndpointError('Admins only', { code: 'FORBIDDEN' });
+  if (!userId || !await isAdmin(userId)) throw new EndpointError('Admins only', { code: 'FORBIDDEN' });
   return userId;
 }
 

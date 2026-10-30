@@ -52,6 +52,5 @@ export const BRAND_ASSETS = [
 
 export const BRAND_TTL_MS = 24 * 60 * 60 * 1000;
 
-// The logo (black on white) shown with the welcome message. If the site renames
-// it, the welcome falls back to text until this is updated.
-export const WELCOME_PHOTO = BRAND_ASSETS[1].url;
+// The supplied welcome image ships with the Mini App's static files.
+export const WELCOME_PHOTO = '/assets/welcome.png';
