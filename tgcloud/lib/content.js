@@ -109,12 +109,12 @@ export function searchSubtopics(themes, query) {
   return results;
 }
 
-// Authors per article and the graphics/narration team; only the subtopic
-// endpoint has these.
+// Authors per article, the artists and the narrators per language; only the
+// subtopic endpoint has these.
 export async function getSubtopicDetail(themeSlug, subtopicSlug) {
   const raw = await getJson(`/api/v1/articles/${themeSlug}/${subtopicSlug}`, CATALOG_TTL_MS);
-  if (!raw) return { authors: {}, artists: [] };
-  return { authors: raw.authors || {}, artists: raw.artists || [] };
+  if (!raw) return { authors: {}, artists: [], narrators: {} };
+  return { authors: raw.authors || {}, artists: raw.artists || [], narrators: raw.narrators || {} };
 }
 
 export async function getArticle(path) {

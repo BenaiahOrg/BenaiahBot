@@ -302,7 +302,14 @@ export async function creditsView(lang, ti, si) {
       lines.push(`<b>${t(lang, type)} · ${t(articleLang, 'langName')}</b>\n${escapeHtml(peopleLine(people, lang))}`);
     }
   }
-  if (detail.artists.length) lines.push(`<b>${t(lang, 'team')}</b>\n${escapeHtml(peopleLine(detail.artists, lang))}`);
+  // Narrators are also listed among a topic's artists; they get their own section.
+  const designers = detail.artists.filter((person) => person.role_en !== 'Narrator');
+  if (designers.length) lines.push(`<b>${t(lang, 'creditGraphics')}</b>\n${escapeHtml(designers.map((person) => personName(person, lang)).join(', '))}`);
+  for (const articleLang of ['en', 'am']) {
+    const people = detail.narrators[articleLang] || [];
+    if (!people.length) continue;
+    lines.push(`<b>${t(lang, 'creditNarration')} · ${t(articleLang, 'langName')}</b>\n${escapeHtml(people.map((person) => personName(person, lang)).join(', '))}`);
+  }
   const html = lines.join('\n\n');
   return {
     html,

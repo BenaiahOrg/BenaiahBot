@@ -291,12 +291,24 @@ await test('Brand assets sends the logo as photos and as original files', async 
   assert.ok(files.params.media.some((m) => m.media.name === 'Benaiah-logo-transparent.png'));
 });
 
-await test('credits list authors per article and the design team', async () => {
+await test('credits list authors, graphics and narration per language', async () => {
+  const person = (en, am, role) => ({ fullname_en: en, fullname_am: am, role_en: role, role_am: role });
+  const detail = {
+    authors: { devotional_en: [person('Truket Lema', 'ትሩኬት ለማ', 'Author')] },
+    artists: [person('Akinahom Getahun', 'አኪናሆም ጌታሁን', 'Graphic Designer'), person('Henok Tesfaye', 'ሄኖክ ተስፋዬ', 'Narrator')],
+    narrators: { en: [person('Courtney Reed', 'ኮርትኒ ሪድ', 'Narrator')], am: [person('Henok Tesfaye', 'ሄኖክ ተስፋዬ', 'Narrator')] },
+  };
+  rawSqlite().prepare('INSERT OR REPLACE INTO cache (key, fetched_at, payload) VALUES (?, ?, ?)')
+    .run('/api/v1/articles/names-of-god/jehovah-jireh', Date.now(), JSON.stringify(detail));
   await press(people.seeker, 'c:1:0', { message_id: 55, chat: { id: 101 }, photo: [{}] });
   const edit = sent('editMessageMedia', 101)[0];
   assert.ok(edit, 'edited the card in place');
-  assert.match(edit.params.media.caption, /ትሩኬት ለማ/);
-  assert.match(edit.params.media.caption, /ምስልና ትረካ/);
+  const caption = edit.params.media.caption;
+  assert.match(caption, /ትሩኬት ለማ/);
+  assert.match(caption, /🎨 ምስሎች<\/b>\nአኪናሆም ጌታሁን\n/, 'graphics lists designers only');
+  assert.match(caption, /🎙 ትረካ · English<\/b>\nኮርትኒ ሪድ/);
+  assert.match(caption, /🎙 ትረካ · አማርኛ<\/b>\nሄኖክ ተስፋዬ/);
+  rawSqlite().exec("DELETE FROM cache WHERE key = '/api/v1/articles/names-of-god/jehovah-jireh'");
 });
 
 await test('search finds Amharic and English matches and logs the query', async () => {
