@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard Preview</title>
+  <link rel="stylesheet" href="../webapp/style.css">
+</head>
+<body>
+<script>
+  // Renders webapp/ with a fake Telegram.WebApp fed by the data `npm test` leaves
+  // in test/.db/demo.json. Serve the project root and open /test/preview.html.
+  (async () => {
+    const demo = await (await fetch('.db/demo.json')).json();
+    window.Telegram = { WebApp: {
+      initData: 'preview', ready() {}, expand() {},
+      showAlert: (m) => alert(m), showConfirm: (m, cb) => cb(confirm(m)),
+      Serverless: { call(name, input, cb) {
+        setTimeout(() => {
+          if (name === 'adminDashboard') cb(null, demo.dashboard);
+          else if (name === 'adminCounselor') cb(null, demo.counselor);
+          else cb(null, { counselors: demo.dashboard.counselors, reachable: true });
+        }, 150);
+      } },
+    } };
+    const page = new DOMParser().parseFromString(await (await fetch('../webapp/index.html')).text(), 'text/html');
+    page.querySelectorAll('script').forEach((s) => s.remove());
+    document.body.innerHTML = page.body.innerHTML;
+    const app = document.createElement('script');
+    app.src = '../webapp/app.js';
+    document.body.append(app);
+  })();
+</script>
+</body>
+</html>

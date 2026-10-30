@@ -1,0 +1,345 @@
+import { db, BotApiError } from 'sdk';
+import { events } from '../schema.js';
+import { brandAssets } from './brand.js';
+import { WEBAPP_URL } from './secrets.js';
+import { ARTICLE_TYPES, SEARCH_RESULTS, SITE_URL, SOCIAL_LINKS, SUBTOPICS_PER_PAGE, TEAM, WELCOME_PHOTO } from './constants.js';
+import {
+  articleWebUrl, audioUrl, findSubtopic, getArticle, getCatalog, getSubtopicDetail, personName, personRole, pick,
+} from './content.js';
+import { fileName, photoUrl, sendAlbum, sendOriginals } from './files.js';
+import { clip, escapeHtml, markdownToHtml } from './format.js';
+import { t } from './i18n.js';
+import { button, keyboard, sendHtml, sendLong, show, urlButton } from './ui.js';
+
+const TYPE_CODE = { devotional: 'd', study_material: 's' };
+const CODE_TYPE = { d: 'devotional', s: 'study_material' };
+
+export function typeFromCode(code) {
+  return CODE_TYPE[code] || null;
+}
+
+export async function logEvent(userId, kind, key = '', lang = '') {
+  try {
+    await db.insert(events).values({ userId, kind, key, lang, createdAt: Date.now() }).run();
+  } catch (error) {
+    console.error('Could not log an event', error?.message || error);
+  }
+}
+
+export function langChooser() {
+  return {
+    html: t('en', 'chooseLang'),
+    keyboard: keyboard([[button('🇬🇧 English', 'L:en'), button('🇪🇹 አማርኛ', 'L:am')]]),
+  };
+}
+
+// The welcome is a photo of the logo with the text as its caption.
+// `notice` (HTML) goes above the welcome text, e.g. "Your request was cancelled."
+// Admins get an extra row for broadcasting and the dashboard.
+export function mainMenu(lang, notice, { admin = false } = {}) {
+  return {
+    html: notice ? `${notice}\n\n${t(lang, 'welcome')}` : t(lang, 'welcome'),
+    photo: WELCOME_PHOTO,
+    keyboard: keyboard([
+      [button(t(lang, 'menuThemes'), 'T', 'primary')],
+      [button(t(lang, 'menuRandom'), 'R'), button(t(lang, 'menuSearch'), 'S')],
+      [button(t(lang, 'menuCounsel'), 'C')],
+      [button(t(lang, 'menuAbout'), 'A'), button(t(lang, 'menuBrand'), 'B')],
+      [button(t(lang, 'menuLang'), 'G'), urlButton(t(lang, 'menuSite'), SITE_URL)],
+      admin ? [button(t(lang, 'menuBroadcast'), 'BC'), ...(WEBAPP_URL ? [{ text: t(lang, 'dashboard'), web_app: { url: WEBAPP_URL } }] : [])] : null,
+    ]),
+  };
+}
+
+export function aboutView(lang) {
+  return {
+    html: t(lang, 'about'),
+    keyboard: keyboard([
+      [button(t(lang, 'aboutMission'), 'A:m'), button(t(lang, 'aboutName'), 'A:o')],
+      [button(t(lang, 'aboutHow'), 'A:w'), button(t(lang, 'aboutTeam'), 'A:t')],
+      [button(t(lang, 'menuBrand'), 'B'), button(t(lang, 'aboutContact'), 'A:c')],
+      [urlButton(t(lang, 'aboutChannel'), SOCIAL_LINKS.channel), urlButton(t(lang, 'aboutApp'), SOCIAL_LINKS.app)],
+      [button(t(lang, 'home'), 'M')],
+    ]),
+  };
+}
+
+const ABOUT_PAGES = { m: 'pageMission', o: 'pageName', w: 'pageHow' };
+
+// One of the About sub-pages: m(ission), o(ur name), w(ork), t(eam), c(ontact).
+export function aboutPage(lang, page) {
+  const nav = [button(t(lang, 'back'), 'A'), button(t(lang, 'home'), 'M')];
+  if (page === 't') {
+    const roles = t(lang, 'teamRoles');
+    const lines = Object.entries(TEAM).map(([role, names]) => `<b>${escapeHtml(roles[role])}</b>\n${names.map(escapeHtml).join(' · ')}`);
+    return { html: t(lang, 'pageTeam', lines.join('\n\n')), keyboard: keyboard([nav]) };
+  }
+  if (page === 'c') {
+    return {
+      html: t(lang, 'pageContact'),
+      keyboard: keyboard([
+        [urlButton('💬 Telegram', SOCIAL_LINKS.contact), urlButton(t(lang, 'aboutChannel'), SOCIAL_LINKS.channel)],
+        [urlButton('Instagram', SOCIAL_LINKS.instagram), urlButton('Facebook', SOCIAL_LINKS.facebook)],
+        [urlButton('X', SOCIAL_LINKS.x), urlButton('Threads', SOCIAL_LINKS.threads), urlButton('LinkedIn', SOCIAL_LINKS.linkedin)],
+        [urlButton(t(lang, 'menuSite'), SITE_URL)],
+        nav,
+      ]),
+    };
+  }
+  return { html: t(lang, ABOUT_PAGES[page] || 'about'), keyboard: keyboard([nav]) };
+}
+
+// The logo as a photo album, then the original files uncompressed.
+export async function sendBrand(chatId, lang) {
+  const assets = await brandAssets();
+  await sendAlbum(chatId, assets.filter((a) => a.photo).map((a) => a.url), t(lang, 'brandCaption'));
+  await sendOriginals(chatId, assets.map((a) => ({ url: a.url, name: a.name })));
+  return sendHtml(chatId, t(lang, 'brandFiles'), keyboard([[button(t(lang, 'menuAbout'), 'A:n'), button(t(lang, 'home'), 'M:n')]]));
+}
+
+export function errorView(lang) {
+  return { html: t(lang, 'loadError'), keyboard: keyboard([[button(t(lang, 'home'), 'M')]]) };
+}
+
+export async function themesView(lang) {
+  const { themes } = await getCatalog();
+  return {
+    html: t(lang, 'themesTitle'),
+    keyboard: keyboard([
+      ...themes.map((theme, ti) => [button(`${pick(theme.title, lang)} · ${t(lang, 'topicCount', theme.subtopics.length)}`, `t:${ti}:0`)]),
+      [button(t(lang, 'home'), 'M')],
+    ]),
+  };
+}
+
+export async function themeView(lang, ti, page) {
+  const { themes } = await getCatalog();
+  const theme = themes[ti];
+  if (!theme) return themesView(lang);
+  const pages = Math.max(1, Math.ceil(theme.subtopics.length / SUBTOPICS_PER_PAGE));
+  const current = Math.min(Math.max(page, 0), pages - 1);
+  const start = current * SUBTOPICS_PER_PAGE;
+  const slice = theme.subtopics.slice(start, start + SUBTOPICS_PER_PAGE);
+  const rows = [];
+  for (let i = 0; i < slice.length; i += 2) {
+    rows.push(slice.slice(i, i + 2).map((subtopic, j) => button(pick(subtopic.title, lang), `s:${ti}:${start + i + j}`)));
+  }
+  if (pages > 1) {
+    rows.push([
+      current > 0 ? button(t(lang, 'prev'), `t:${ti}:${current - 1}`) : button(' ', 'noop'),
+      button(`${current + 1}/${pages}`, 'noop'),
+      current < pages - 1 ? button(t(lang, 'next'), `t:${ti}:${current + 1}`) : button(' ', 'noop'),
+    ]);
+  }
+  rows.push([button(t(lang, 'back'), 'T'), button(t(lang, 'home'), 'M')]);
+  return {
+    html: t(lang, 'themeTitle', escapeHtml(pick(theme.title, lang)), theme.subtopics.length),
+    keyboard: keyboard(rows),
+  };
+}
+
+function subtopicKeyboard(lang, ti, si, subtopic) {
+  const has = (type) => Boolean(subtopic.articles[type].en || subtopic.articles[type].am);
+  const articleButtons = ARTICLE_TYPES.filter(has).map((type) => button(t(lang, type), `a:${ti}:${si}:${TYPE_CODE[type]}:${lang}`, 'primary'));
+  const graphicButtons = [];
+  if (subtopic.square[lang].length || subtopic.square.en.length) graphicButtons.push(button(t(lang, 'graphics'), `g:${ti}:${si}:q`));
+  if (subtopic.story[lang].length || subtopic.story.en.length) graphicButtons.push(button(t(lang, 'story'), `g:${ti}:${si}:y`));
+  return keyboard([
+    articleButtons,
+    graphicButtons,
+    [button(t(lang, 'credits'), `c:${ti}:${si}`)],
+    [button(t(lang, 'back'), `t:${ti}:${Math.floor(si / SUBTOPICS_PER_PAGE)}`), button(t(lang, 'home'), 'M')],
+  ]);
+}
+
+export async function subtopicView(lang, ti, si) {
+  const catalog = await getCatalog();
+  const found = findSubtopic(catalog, ti, si);
+  if (!found) return themesView(lang);
+  const { theme, subtopic } = found;
+  const html = [
+    `<b>${escapeHtml(pick(subtopic.title, lang))}</b>`,
+    `<i>${escapeHtml(pick(theme.title, lang))}</i>`,
+    '',
+    escapeHtml(clip(pick(subtopic.description, lang), 700)),
+  ].join('\n');
+  return {
+    html,
+    photo: photoUrl(pick(subtopic.covers, lang)) || undefined,
+    keyboard: subtopicKeyboard(lang, ti, si, subtopic),
+  };
+}
+
+function peopleLine(people, lang) {
+  return people.map((person) => {
+    const name = personName(person, lang);
+    const role = personRole(person, lang);
+    return role ? `${name} (${role})` : name;
+  }).filter(Boolean).join(', ');
+}
+
+export async function creditsView(lang, ti, si) {
+  const catalog = await getCatalog();
+  const found = findSubtopic(catalog, ti, si);
+  if (!found) return themesView(lang);
+  const { theme, subtopic } = found;
+  const detail = await getSubtopicDetail(theme.slug, subtopic.slug);
+  const lines = [t(lang, 'creditsTitle', escapeHtml(pick(subtopic.title, lang))), ''];
+  for (const type of ARTICLE_TYPES) {
+    for (const articleLang of ['en', 'am']) {
+      const people = detail.authors[`${type}_${articleLang}`] || [];
+      if (!people.length) continue;
+      lines.push(`<b>${t(lang, type)} · ${t(articleLang, 'langName')}</b>\n${escapeHtml(peopleLine(people, lang))}`);
+    }
+  }
+  if (detail.artists.length) lines.push(`<b>${t(lang, 'team')}</b>\n${escapeHtml(peopleLine(detail.artists, lang))}`);
+  const html = lines.join('\n\n');
+  return {
+    html,
+    // A photo caption holds 1024 characters; longer credits become a text screen.
+    photo: html.length <= 1024 ? photoUrl(pick(subtopic.covers, lang)) || undefined : undefined,
+    keyboard: keyboard([[button(t(lang, 'back'), `s:${ti}:${si}`), button(t(lang, 'home'), 'M')]]),
+  };
+}
+
+// Sends an article as a new message. `articleLang` may differ from the UI
+// language when the user asks for the other translation.
+export async function sendArticle(chatId, lang, ti, si, type, articleLang) {
+  const catalog = await getCatalog();
+  const found = findSubtopic(catalog, ti, si);
+  if (!found) return sendHtml(chatId, t(lang, 'loadError'));
+  const { theme, subtopic } = found;
+  const otherLang = articleLang === 'en' ? 'am' : 'en';
+  let readLang = articleLang;
+  if (!subtopic.articles[type][readLang]) {
+    if (!subtopic.articles[type][otherLang]) return sendHtml(chatId, t(lang, 'notAvailable'));
+    await sendHtml(chatId, t(readLang, 'notAvailable'));
+    readLang = otherLang;
+  }
+  const [article, detail] = await Promise.all([
+    getArticle(subtopic.articles[type][readLang]),
+    getSubtopicDetail(theme.slug, subtopic.slug).catch(() => ({ authors: {}, artists: [] })),
+  ]);
+  if (!article?.content) return sendHtml(chatId, t(lang, 'loadError'));
+
+  const authors = peopleLine(detail.authors[`${type}_${readLang}`] || [], readLang);
+  const listen = audioUrl(article.audio);
+  const meta = [pick(theme.title, readLang), pick(subtopic.title, readLang), article.date].filter(Boolean).join(' · ');
+  const title = article.title || pick(subtopic.title, readLang);
+
+  const markdown = [
+    `# ${title}`,
+    article.header ? `**${article.header}**` : '',
+    `*${meta}*`,
+    article.content.trim(),
+    '---',
+    authors ? `✍️ ${t(readLang, 'writtenBy')}: ${authors}` : '',
+    listen ? `[${t(readLang, 'listen')}](${listen})` : '',
+  ].filter(Boolean).join('\n\n');
+
+  const fallbackHtml = [
+    `<b>${escapeHtml(title)}</b>`,
+    article.header ? `<b>${escapeHtml(article.header)}</b>` : '',
+    `<i>${escapeHtml(meta)}</i>`,
+    markdownToHtml(article.content),
+    authors ? `✍️ ${escapeHtml(t(readLang, 'writtenBy'))}: ${escapeHtml(authors)}` : '',
+    listen ? `<a href="${escapeHtml(listen)}">${escapeHtml(t(readLang, 'listen'))}</a>` : '',
+  ].filter(Boolean).join('\n\n');
+
+  const otherType = ARTICLE_TYPES.find((other) => other !== type);
+  const rows = [];
+  if (subtopic.articles[type][readLang === 'en' ? 'am' : 'en']) {
+    rows.push([button(t(readLang, 'readIn'), `a:${ti}:${si}:${TYPE_CODE[type]}:${readLang === 'en' ? 'am' : 'en'}:n`)]);
+  }
+  if (subtopic.articles[otherType][readLang] || subtopic.articles[otherType][lang]) {
+    rows.push([button(t(lang, otherType), `a:${ti}:${si}:${TYPE_CODE[otherType]}:${lang}:n`)]);
+  }
+  rows.push([button(t(lang, 'back'), `s:${ti}:${si}:n`), button(t(lang, 'home'), 'M:n')]);
+  rows.push([urlButton(t(lang, 'menuSite'), articleWebUrl(theme, subtopic, type, readLang))]);
+
+  return sendLong(chatId, { markdown, fallbackHtml, replyMarkup: keyboard(rows) });
+}
+
+function graphicSet(subtopic, lang, kind) {
+  const set = kind === 'y' ? subtopic.story : subtopic.square;
+  return set[lang].length ? set[lang] : set.en.length ? set.en : set.am;
+}
+
+// Sends a subtopic's square or story graphics as a photo album (resized, so
+// Telegram accepts them), then a message with navigation and a button for the
+// uncompressed originals.
+export async function sendGraphics(chatId, lang, ti, si, kind) {
+  const catalog = await getCatalog();
+  const found = findSubtopic(catalog, ti, si);
+  if (!found) return sendHtml(chatId, t(lang, 'loadError'));
+  const { subtopic } = found;
+  const urls = graphicSet(subtopic, lang, kind);
+  const back = [button(t(lang, 'back'), `s:${ti}:${si}:n`), button(t(lang, 'home'), 'M:n')];
+  if (!urls.length) return sendHtml(chatId, t(lang, 'noGraphics'), keyboard([back]));
+  try {
+    await sendAlbum(chatId, urls);
+  } catch (error) {
+    if (!(error instanceof BotApiError)) throw error;
+    // Telegram couldn't fetch an image; the originals button still works.
+    console.warn('graphics album failed', error.description);
+  }
+  const label = `${kind === 'y' ? t(lang, 'story') : t(lang, 'graphics')} — <b>${escapeHtml(pick(subtopic.title, lang))}</b>`;
+  return sendHtml(chatId, kind === 'y' ? `${label}\n${t(lang, 'storyHint')}` : label, keyboard([
+    [button(t(lang, 'downloadOriginals'), `gd:${ti}:${si}:${kind}`, 'primary')],
+    back,
+  ]));
+}
+
+export async function sendGraphicOriginals(chatId, lang, ti, si, kind) {
+  const catalog = await getCatalog();
+  const found = findSubtopic(catalog, ti, si);
+  if (!found) return sendHtml(chatId, t(lang, 'loadError'));
+  const { subtopic } = found;
+  const urls = graphicSet(subtopic, lang, kind);
+  const prefix = `${subtopic.slug}-${kind === 'y' ? 'story' : 'square'}`;
+  await sendOriginals(chatId, urls.map((url, n) => ({ url, name: `${prefix}-${n + 1}.${fileName(url, 'x.png').split('.').pop()}` })));
+  return sendHtml(chatId, t(lang, 'originalsReady'), keyboard([[button(t(lang, 'back'), `s:${ti}:${si}:n`), button(t(lang, 'home'), 'M:n')]]));
+}
+
+export async function randomDevotional(lang) {
+  const { themes } = await getCatalog();
+  const choices = [];
+  themes.forEach((theme, ti) => theme.subtopics.forEach((subtopic, si) => {
+    if (subtopic.articles.devotional[lang]) choices.push({ ti, si });
+  }));
+  if (!choices.length) return null;
+  return choices[Math.floor(Math.random() * choices.length)];
+}
+
+function normalize(text) {
+  return String(text || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+export async function searchView(lang, query) {
+  const { themes } = await getCatalog();
+  const needle = normalize(query);
+  const results = [];
+  themes.forEach((theme, ti) => theme.subtopics.forEach((subtopic, si) => {
+    const haystack = normalize([
+      theme.title.en, theme.title.am, subtopic.title.en, subtopic.title.am,
+      subtopic.description.en, subtopic.description.am, subtopic.slug,
+    ].join(' '));
+    if (needle && haystack.includes(needle)) results.push({ ti, si, theme, subtopic });
+  }));
+  const safe = escapeHtml(clip(query, 60));
+  if (!results.length) {
+    return {
+      html: t(lang, 'searchNone', safe),
+      keyboard: keyboard([[button(t(lang, 'menuSearch'), 'S'), button(t(lang, 'home'), 'M')]]),
+    };
+  }
+  return {
+    html: t(lang, 'searchResults', safe),
+    keyboard: keyboard([
+      ...results.slice(0, SEARCH_RESULTS).map(({ ti, si, theme, subtopic }) => [
+        button(`${pick(subtopic.title, lang)} · ${pick(theme.title, lang)}`, `s:${ti}:${si}`),
+      ]),
+      [button(t(lang, 'menuSearch'), 'S'), button(t(lang, 'home'), 'M')],
+    ]),
+  };
+}

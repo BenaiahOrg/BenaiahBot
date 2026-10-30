@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Benaiah Admin</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Benaiah</h1>
+      <p class="sub" id="updated">Loading…</p>
+    </div>
+    <button class="icon" id="refresh" aria-label="Refresh">↻</button>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
+    <button role="tab" data-tab="counselors">Counselors</button>
+    <button role="tab" data-tab="requests">Sessions</button>
+    <button role="tab" data-tab="content">Content</button>
+  </nav>
+
+  <main>
+    <section id="overview" class="panel"></section>
+    <section id="counselors" class="panel" hidden>
+      <form id="add" class="card add">
+        <h2>Add a counselor</h2>
+        <p class="hint">Use their @username or numeric Telegram id. They must open the bot once before they can receive requests.</p>
+        <div class="row">
+          <input id="handle" placeholder="@username or id" autocomplete="off" required>
+          <input id="name" placeholder="Display name (optional)" autocomplete="off">
+        </div>
+        <button type="submit" class="primary">Add counselor</button>
+        <p class="error" id="add-error" hidden></p>
+      </form>
+      <div id="counselor-list"></div>
+    </section>
+    <section id="requests" class="panel" hidden></section>
+    <section id="content" class="panel" hidden></section>
+  </main>
+
+  <div class="sheet" id="sheet" hidden>
+    <div class="sheet-body">
+      <button class="icon close" id="sheet-close" aria-label="Close">✕</button>
+      <div id="sheet-content"></div>
+    </div>
+  </div>
+
+  <div class="blocked" id="blocked" hidden>
+    <h2>Open this from the bot</h2>
+    <p>The dashboard only works inside Telegram, opened by an admin with /admin.</p>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

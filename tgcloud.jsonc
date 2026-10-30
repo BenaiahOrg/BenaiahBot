@@ -1,0 +1,7 @@
+{
+  // The admin dashboard (plain HTML, no build step) is hosted as the Mini App.
+  "static": {
+    "source": "webapp"
+  },
+  "$schema": "./node_modules/@tgcloud/cli/schema/tgcloud.json"
+}

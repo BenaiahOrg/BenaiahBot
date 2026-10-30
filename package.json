@@ -1,0 +1,14 @@
+{
+  "name": "benaiahbot",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@tgcloud/cli": "^0.2.0"
+  },
+  "scripts": {
+    "secrets": "node scripts/write-secrets.mjs",
+    "deploy": "node scripts/write-secrets.mjs && node scripts/cloud.mjs",
+    "status": "tgcloud status",
+    "test": "node --no-warnings --import ./test/register.mjs test/run.mjs"
+  }
+}
